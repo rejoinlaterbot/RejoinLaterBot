@@ -1,0 +1,103 @@
+services:
+  bot:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      DATA_ENCRYPTION_KEY_FILE: /run/secrets/data_encryption_key
+      LOOKUP_HMAC_KEY_FILE: /run/secrets/lookup_hmac_key
+      DATABASE_URL_FILE: /run/secrets/database_url
+      BOT_USERNAME: ${BOT_USERNAME:-RejoinLaterBot}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-45}
+      SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-100}
+      INVITE_TTL_HOURS: ${INVITE_TTL_HOURS:-24}
+      MAX_CUSTOM_DAYS: ${MAX_CUSTOM_DAYS:-3650}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    secrets:
+      - telegram_bot_token
+      - data_encryption_key
+      - lookup_hmac_key
+      - database_url
+    networks:
+      - internal
+      - outbound
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: rejoinlater
+      POSTGRES_USER: rejoinlater
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+      - database_access
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rejoinlater -d rejoinlater"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  quality:
+    profiles: [quality]
+    build:
+      context: .
+      target: quality
+    working_dir: /work
+    volumes:
+      - .:/work
+    environment:
+      TEST_DATABASE_URL: postgresql+asyncpg://rejoinlater_test:test-only@postgres-test/rejoinlater_test
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    networks:
+      - internal
+
+  postgres-test:
+    profiles: [quality]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: rejoinlater_test
+      POSTGRES_USER: rejoinlater_test
+      POSTGRES_PASSWORD: test-only
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rejoinlater_test -d rejoinlater_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+secrets:
+  telegram_bot_token:
+    file: ${SECRETS_DIR:-/etc/rejoinlater/secrets}/telegram_bot_token
+  data_encryption_key:
+    file: ${SECRETS_DIR:-/etc/rejoinlater/secrets}/data_encryption_key
+  lookup_hmac_key:
+    file: ${SECRETS_DIR:-/etc/rejoinlater/secrets}/lookup_hmac_key
+  database_url:
+    file: ${SECRETS_DIR:-/etc/rejoinlater/secrets}/database_url
+  postgres_password:
+    file: ${SECRETS_DIR:-/etc/rejoinlater/secrets}/postgres_password
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+    internal: true
+  database_access:
+  outbound:
